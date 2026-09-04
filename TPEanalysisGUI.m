@@ -1,14 +1,18 @@
 function TPEanalysisGUI(data)
 %TPEANALYSISGUI  GUI wrapper for transient pressure event (TPE) analysis.
 %
-%         Version 1.0
-%         Date: July 9, 2026
+%         Version 1.1
+%         Date: August 31, 2026
 %         Author: G. Herrera 
 %         Co-Author/AI Tool: OpenAI ChatGPT (GPT-5.5)
 %         Note: The core architecture was designed by the author and implemented by
 %           ChatGPT via prompt engineering. All code was reviewed,
 %           modified, and verified by the author. Refer to dependent
 %           functions for further information.
+%         Version History: 1.0 July 9, 2026 - Initial Release
+%                          1.1 August 21, 2026 - Fix Refresh Table
+%                          resetting entire record selection bug - updated
+%                          function refreshTable(~,~)
 %
 % Usage:
 %   TPEanalysisGUI(data)
@@ -268,7 +272,22 @@ function TPEanalysisGUI(data)
     end
 
     function refreshTable(~,~)
+        % Preserve the user's current record selection when rebuilding
+        % the table (for example, after TPE detection updates HasTPE/NumTPEs).
+        oldUse = [];
+
+        if ~isempty(tbl.Data) && istable(tbl.Data) && ...
+                ismember('Use', tbl.Data.Properties.VariableNames)
+            oldUse = logical(tbl.Data.Use);
+        end
+
         Tnew = buildExperimentTable(data);
+
+        % Restore selection if the number of records has not changed.
+        if ~isempty(oldUse) && numel(oldUse) == height(Tnew)
+            Tnew.Use = oldUse;
+        end
+
         tbl.Data = Tnew;
         tbl.ColumnName = Tnew.Properties.VariableNames;
         tbl.ColumnEditable = getEditableColumns(Tnew);
