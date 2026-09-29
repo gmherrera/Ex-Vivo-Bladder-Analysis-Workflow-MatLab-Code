@@ -1,7 +1,7 @@
 function binningAnalysisGUI(data)
 %BINNINGANALYSISGUI  GUI wrapper for grouped 2D binning functions.
-%     Version 1.0
-%     Date: July 8, 2026
+%     Version 1.1
+%     Date: September 28, 2026
 %     Author: G. Herrera 
 %     Co-Author/AI Tool: OpenAI ChatGPT (GPT-5.5)
 %     Note: The core workflow, architecture and GUI Layout were designed by
@@ -9,6 +9,16 @@ function binningAnalysisGUI(data)
 %           All code was reviewed, modified, and verified by the author.
 %           Refer to individual function dependencies for further
 %           information.
+%     Version History:
+%           1.1  - September 28, 2026
+%                  Added groupKey selection table beside the experiment
+%                  table for rapid group-level experiment selection.
+%                  Reference-normalized nerve activity is now treated as a
+%                  standard processed signal read directly from
+%                  proc.smoothNervePctReferenceMax. Reference selection and
+%                  normalization are performed upstream by ImportAndCurate.
+%                  Added support for reference-normalized nerve activity.
+%           1.0 - July 8, 2026 - Initial Release
 %
 %
 % Usage:
@@ -45,7 +55,8 @@ function binningAnalysisGUI(data)
         'Nerve raw Hz', ...
         'Nerve smooth', ...
         'Nerve 10 s movmean', ...
-        'Nerve percent max'};
+        'Nerve percent max', ...
+        'Afferent Nerve Activity (% Reference Max)'};
 
     varPaths = containers.Map(varLabels, { ...
         'pressure', ...
@@ -57,7 +68,8 @@ function binningAnalysisGUI(data)
         'nerveHz', ...
         'proc.nerveSmooth', ...
         'proc.smoothNerveMovMean10s', ...
-        'proc.smoothNervePctMax'});
+        'proc.smoothNervePctMax', ...
+        'proc.smoothNervePctReferenceMax'});
 
     groupLabels = {'User group: meta.groupKey', 'Auto condition: meta.conditionKey'};
     groupPaths  = containers.Map(groupLabels, {'meta.groupKey','meta.conditionKey'});
@@ -66,7 +78,7 @@ function binningAnalysisGUI(data)
     T = buildExperimentTable(data);
 
     % ---------------- UI layout ----------------
-    fig = uifigure('Name','Binning Analysis GUI', 'Position',[100 100 1250 720]);
+    fig = uifigure('Name','Binning Analysis GUI', 'Position',[70 80 1450 760]);
 
     % File menu
     fileMenu = uimenu(fig, 'Text', 'File');
@@ -78,31 +90,65 @@ function binningAnalysisGUI(data)
 
     gl = uigridlayout(fig,[2 2]);
     gl.RowHeight = {'1x', 42};
-    gl.ColumnWidth = {'1.25x','1x'};
+    gl.ColumnWidth = {'1.65x','1x'};
     gl.Padding = [10 10 10 10];
     gl.RowSpacing = 8;
     gl.ColumnSpacing = 10;
 
-    leftPanel = uipanel(gl, 'Title','Experiments in loaded data');
+    leftPanel = uipanel(gl, 'Title','Experiment selection');
     leftPanel.Layout.Row = 1;
     leftPanel.Layout.Column = 1;
 
-    lp = uigridlayout(leftPanel,[2 1]);
-    lp.RowHeight = {'1x', 36};
-    lp.ColumnWidth = {'1x'};
+    % GroupKey selector on the left; individual experiment table on the right.
+    lp = uigridlayout(leftPanel,[1 2]);
+    lp.ColumnWidth = {300,'1x'};
+    lp.RowHeight = {'1x'};
+    lp.Padding = [6 6 6 6];
+    lp.ColumnSpacing = 8;
 
-    tbl = uitable(lp, 'Data', T);
+    groupPanel = uipanel(lp,'Title','Groups (meta.groupKey)');
+    groupPanel.Layout.Row = 1;
+    groupPanel.Layout.Column = 1;
+
+    gpl = uigridlayout(groupPanel,[2 1]);
+    gpl.RowHeight = {'1x',36};
+    gpl.Padding = [6 6 6 6];
+
+    groupTbl = uitable(gpl,'Data',buildGroupSelectionTable(data,T));
+    groupTbl.Layout.Row = 1;
+    groupTbl.ColumnEditable = [true false false false];
+    groupTbl.ColumnName = {'Use','GroupKey','Records','Preps'};
+    groupTbl.ColumnWidth = {45,'1x',55,50};
+    groupTbl.CellEditCallback = @groupSelectionChanged;
+
+    groupBtnGrid = uigridlayout(gpl,[1 2]);
+    groupBtnGrid.Layout.Row = 2;
+    groupBtnGrid.ColumnWidth = {'1x','1x'};
+    uibutton(groupBtnGrid,'Text','Select all groups', ...
+        'ButtonPushedFcn',@(~,~)setAllGroups(true));
+    uibutton(groupBtnGrid,'Text','Clear groups', ...
+        'ButtonPushedFcn',@(~,~)setAllGroups(false));
+
+    experimentPanel = uipanel(lp,'Title','Individual experiments');
+    experimentPanel.Layout.Row = 1;
+    experimentPanel.Layout.Column = 2;
+
+    ep = uigridlayout(experimentPanel,[2 1]);
+    ep.RowHeight = {'1x',36};
+    ep.Padding = [6 6 6 6];
+
+    tbl = uitable(ep, 'Data', T);
     tbl.ColumnEditable = [true false false false false false false false false];
     tbl.ColumnName = T.Properties.VariableNames;
     tbl.Layout.Row = 1;
+    tbl.CellEditCallback = @(~,~)selectionChanged();
 
-    btnGrid = uigridlayout(lp,[1 5]);
+    btnGrid = uigridlayout(ep,[1 4]);
     btnGrid.Layout.Row = 2;
-    btnGrid.ColumnWidth = {'1x','1x','1x','1x','1x'};
+    btnGrid.ColumnWidth = {'1x','1x','1x','1x'};
 
     uibutton(btnGrid,'Text','Select all','ButtonPushedFcn',@(~,~)setUseAll(true));
     uibutton(btnGrid,'Text','Select none','ButtonPushedFcn',@(~,~)setUseAll(false));
-    uibutton(btnGrid,'Text','Only selected group','ButtonPushedFcn',@selectCurrentGroup);
     uibutton(btnGrid,'Text','Exclude stable','ButtonPushedFcn',@excludeStable);
     uibutton(btnGrid,'Text','Refresh table','ButtonPushedFcn',@refreshTable);
 
@@ -131,6 +177,7 @@ function binningAnalysisGUI(data)
 
     uilabel(fgl,'Text','Group by');
     fixedGroup = uidropdown(fgl,'Items',groupLabels,'Value','User group: meta.groupKey');
+
 
     uilabel(fgl,'Text','X bin width');
     fixedBinWidth = uieditfield(fgl,'numeric','Value',2);
@@ -167,6 +214,7 @@ function binningAnalysisGUI(data)
 
     uilabel(egl,'Text','Group by');
     equalGroup = uidropdown(egl,'Items',groupLabels,'Value','User group: meta.groupKey');
+
 
     uilabel(egl,'Text','Number of bins');
     equalNBins = uieditfield(egl,'numeric','Value',12,'Limits',[1 Inf]);
@@ -237,6 +285,7 @@ function binningAnalysisGUI(data)
         lastOut = [];
 
         tbl.Data = buildExperimentTable(data);
+        groupTbl.Data = buildGroupSelectionTable(data,tbl.Data);
         updateStatus();
         fig.Name = sprintf('Binning Analysis GUI - %s', matFile);
     end
@@ -245,23 +294,7 @@ function binningAnalysisGUI(data)
         T2 = tbl.Data;
         T2.Use(:) = tf;
         tbl.Data = T2;
-        updateStatus();
-    end
-
-    function selectCurrentGroup(~,~)
-        T2 = tbl.Data;
-        groups = unique(string(T2.Group),'stable');
-        groups = groups(strlength(groups)>0);
-        if isempty(groups)
-            uialert(fig,'No groups found.','No groups');
-            return
-        end
-        [idx, ok] = listdlg('PromptString','Select group to keep:', ...
-            'SelectionMode','single','ListString',cellstr(groups));
-        if ~ok, return; end
-        T2.Use = string(T2.Group) == groups(idx);
-        tbl.Data = T2;
-        updateStatus();
+        selectionChanged();
     end
 
     function excludeStable(~,~)
@@ -269,12 +302,59 @@ function binningAnalysisGUI(data)
         isStable = strcmpi(string(T2.VolumeMode),'stable');
         T2.Use(isStable) = false;
         tbl.Data = T2;
-        updateStatus();
+        selectionChanged();
     end
 
     function refreshTable(~,~)
         tbl.Data = buildExperimentTable(data);
+        groupTbl.Data = buildGroupSelectionTable(data,tbl.Data);
         updateStatus();
+    end
+
+    function selectionChanged()
+        syncGroupTableFromExperiments();
+        updateStatus();
+    end
+
+    function groupSelectionChanged(~,event)
+        % A group checkbox controls every experiment carrying that groupKey.
+        if isempty(event.Indices) || event.Indices(2) ~= 1
+            return
+        end
+        GT = groupTbl.Data;
+        row = event.Indices(1);
+        key = string(GT.GroupKey(row));
+        tf = logical(GT.Use(row));
+
+        T2 = tbl.Data;
+        T2.Use(string(T2.Group) == key) = tf;
+        tbl.Data = T2;
+        updateStatus();
+    end
+
+    function setAllGroups(tf)
+        GT = groupTbl.Data;
+        if isempty(GT), return; end
+        GT.Use(:) = tf;
+        groupTbl.Data = GT;
+
+        T2 = tbl.Data;
+        T2.Use(:) = tf;
+        tbl.Data = T2;
+        updateStatus();
+    end
+
+    function syncGroupTableFromExperiments()
+        % A checked group means all records in that group are currently in use.
+        % If the user manually excludes one record, the group checkbox becomes
+        % unchecked while the remaining individual selections are preserved.
+        GT = groupTbl.Data;
+        T2 = tbl.Data;
+        for gg = 1:height(GT)
+            mask = string(T2.Group) == string(GT.GroupKey(gg));
+            GT.Use(gg) = any(mask) && all(T2.Use(mask));
+        end
+        groupTbl.Data = GT;
     end
 
     function updateStatus()
@@ -433,6 +513,46 @@ end
 % =====================================================================
 % Helpers
 % =====================================================================
+function G = buildGroupSelectionTable(data,T)
+%BUILDGROUPSELECTIONTABLE Summarize meta.groupKey for group-level selection.
+% Use is true only when all records in that group are selected in T.
+
+    if isempty(data) || isempty(T) || height(T) == 0
+        G = table(false(0,1), strings(0,1), zeros(0,1), zeros(0,1), ...
+            'VariableNames',{'Use','GroupKey','Records','Preps'});
+        return
+    end
+
+    keys = unique(string(T.Group),'stable');
+    keys = keys(strlength(keys) > 0);
+
+    nG = numel(keys);
+    Use = false(nG,1);
+    Records = zeros(nG,1);
+    Preps = zeros(nG,1);
+
+    for g = 1:nG
+        mask = string(T.Group) == keys(g);
+        Records(g) = sum(mask);
+        Use(g) = all(T.Use(mask));
+
+        prep = strings(sum(mask),1);
+        idx = find(mask);
+        for j = 1:numel(idx)
+            ii = idx(j);
+            if isfield(data(ii),'meta') && isstruct(data(ii).meta) && ...
+                    isfield(data(ii).meta,'prepID') && ~isempty(data(ii).meta.prepID)
+                prep(j) = string(data(ii).meta.prepID);
+            end
+        end
+        prep = prep(strlength(prep) > 0);
+        Preps(g) = numel(unique(prep,'stable'));
+    end
+
+    GroupKey = keys(:);
+    G = table(Use,GroupKey,Records,Preps);
+end
+
 function T = buildExperimentTable(data)
     n = numel(data);
     Use = true(n,1);
@@ -488,6 +608,18 @@ function s = parseDateTag(tag)
                     s = tag;
                 end
             end
+        end
+    end
+end
+
+function groups = getGroupKeys(data)
+    groups = strings(numel(data),1);
+    for i = 1:numel(data)
+        if isfield(data(i),'meta') && isfield(data(i).meta,'groupKey') && ...
+                strlength(string(data(i).meta.groupKey)) > 0
+            groups(i) = string(data(i).meta.groupKey);
+        else
+            groups(i) = "Unassigned";
         end
     end
 end
